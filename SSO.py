@@ -1,7 +1,7 @@
 # SSO Dashboard - Cascaron (VersiÃ³n clara) - Streamlit app
 # Guardar como: sso_dashboard_cascaron.py
 # Requisitos: streamlit, pandas, numpy, plotly
-# Ejecutar: streamlit run sso_dashboard_cascaron.py
+# Ejecutar: streamlit run sso_dashboard_cascaron.pyhttps://raw.githubusercontent.com/yyangs21/s4lU3b1nEst4r/master/Logo.png
 
 import streamlit as st
 import pandas as pd
@@ -104,7 +104,7 @@ def df_to_excel_bytes(df_dict):
 # UI - Sidebar
 # ----------------------
 with st.sidebar:
-    st.image("LogoC.png", width=180)  # spacer
+    st.image("https://raw.githubusercontent.com/yyangs21/SS0C0mB3X1M/master/LogoC.png", width=180)  # spacer
     st.title("SSO Dashboard")
     page = st.radio("Secciones", ["Dashboard", "Matriz de Riesgos", "Incidentes", "Alertas", "Predictivo", "Reportes"], index=0)
     st.markdown("---")
@@ -326,3 +326,4 @@ elif page == "Reportes":
 # ----------------------
 st.markdown("\n---\n")
 st.markdown("<div style='text-align:center;color:#6b7280;'>Cascaron SSO - Demo .</div>", unsafe_allow_html=True)
+
