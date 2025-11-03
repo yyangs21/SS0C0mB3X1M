@@ -1,329 +1,391 @@
-# SSO Dashboard - Cascaron (VersiÃ³n clara) - Streamlit app
-# Guardar como: sso_dashboard_cascaron.py
-# Requisitos: streamlit, pandas, numpy, plotly
-# Ejecutar: streamlit run sso_dashboard_cascaron.pyhttps://raw.githubusercontent.com/yyangs21/s4lU3b1nEst4r/master/Logo.png
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime
+import os
 
-st.set_page_config(page_title="SSO Dashboard - Cascaron", layout="wide")
+# ------------------------------------------------
+# CONFIGURACIÓN INICIAL
+# ------------------------------------------------
+st.set_page_config(page_title="SSO Dashboard - Datos Reales", layout="wide")
 
-# ----------------------
-# Datos simulados
-# ----------------------
+# Ruta fija al archivo Excel
+DEFAULT_EXCEL_PATH = r"C:\Users\yyang\Downloads\SSO_datos_ejemplo.xlsx"
+
+# ------------------------------------------------
+# FUNCIONES DE CARGA Y EXPORTACIÓN
+# ------------------------------------------------
 @st.cache_data
-def generar_datos_simulados(seed=42):
-    np.random.seed(seed)
-    today = pd.Timestamp.today().normalize()
-    # Incidentes (12 meses)
-    fechas = [today - pd.Timedelta(days=int(x)) for x in np.random.randint(0, 365, 200)]
-    areas = ["Produccion", "Mantenimiento", "Logistica", "Administracion", "Calidad"]
-    tipos = ["Accidente", "Incidente", "Casi Accidente"]
-    causas = ["Humano", "Mecanico", "Ambiental", "Falla de equipo", "Procedimiento"]
+def cargar_datos_excel(path=DEFAULT_EXCEL_PATH):
+    """Lee las tres hojas del archivo Excel real"""
+    if not os.path.exists(path):
+        st.error(f"❌ No se encontró el archivo en la ruta: {path}")
+        st.stop()
 
-    df_inc = pd.DataFrame({
-        "ID": [f"INC{1000+i}" for i in range(len(fechas))],
-        "Fecha": fechas,
-        "Area": np.random.choice(areas, len(fechas)),
-        "Puesto": np.random.choice(["Operario","Supervisor","Tecnico","Auxiliar"], len(fechas)),
-        "Tipo": np.random.choice(tipos, len(fechas), p=[0.2, 0.6, 0.2]),
-        "Causa": np.random.choice(causas, len(fechas)),
-        "Dias_Perdidos": np.random.poisson(0.4, len(fechas)),
-        "Severidad": np.random.randint(1,6,len(fechas)),
-        "Probabilidad": np.random.randint(1,6,len(fechas)),
-        "Descripcion": ["Descripcion del evento..." for _ in fechas]
-    })
-    df_inc["Riesgo"] = df_inc["Severidad"] * df_inc["Probabilidad"]
+    try:
+        df_incidentes = pd.read_excel(path, sheet_name="Incidentes")
+        df_riesgos = pd.read_excel(path, sheet_name="Riesgos")
+        df_capacitaciones = pd.read_excel(path, sheet_name="Capacitaciones")
 
-    # Matriz de riesgos (IPERC)
-    peligros = ["Caida de altura","Contacto con maquina","Sobreesfuerzo","Exposicion quimica",
-                "Electrico","Ruido","Golpe contra objeto"]
-    rows = 30
-    df_riesgos = pd.DataFrame({
-        "ID_Riesgo": [f"R{100+i}" for i in range(rows)],
-        "Area": np.random.choice(areas, rows),
-        "Peligro": np.random.choice(peligros, rows),
-        "Consecuencia": np.random.choice(["Lesion leve","Lesion grave","Enfermedad"], rows),
-        "Probabilidad": np.random.randint(1,6,rows),
-        "Severidad": np.random.randint(1,6,rows),
-    })
-    df_riesgos["Riesgo"] = df_riesgos["Probabilidad"] * df_riesgos["Severidad"]
-    df_riesgos["Nivel"] = df_riesgos["Riesgo"].apply(lambda x: "Alto" if x>=15 else ("Medio" if x>=6 else "Bajo"))
+        # Limpieza y tipos
+        df_incidentes['Fecha'] = pd.to_datetime(df_incidentes['Fecha'], errors='coerce')
+        if 'Riesgo' not in df_incidentes.columns:
+            df_incidentes['Riesgo'] = df_incidentes['Severidad'] * df_incidentes['Probabilidad']
 
-    # Capacitaciones
-    months = pd.date_range(end=today, periods=12, freq='M')
-    df_cap = pd.DataFrame({
-        "Mes": months.strftime('%Y-%m'),
-        "Capacitaciones": np.random.randint(1,20,len(months)),
-        "Asistentes": np.random.randint(10,200,len(months))
-    })
+        if 'Nivel de Riesgo' in df_riesgos.columns:
+            df_riesgos['Nivel'] = df_riesgos['Nivel de Riesgo']
+        else:
+            if 'Probabilidad' in df_riesgos.columns and 'Severidad' in df_riesgos.columns:
+                df_riesgos['Riesgo'] = df_riesgos['Probabilidad'] * df_riesgos['Severidad']
+                df_riesgos['Nivel'] = df_riesgos['Riesgo'].apply(lambda x: "Alto" if x >= 15 else ("Medio" if x >= 6 else "Bajo"))
 
-    return df_inc.sort_values('Fecha', ascending=False), df_riesgos, df_cap
+        if 'Mes' in df_capacitaciones.columns:
+            df_capacitaciones['Mes'] = df_capacitaciones['Mes'].astype(str)
 
-# Cargar datos
-df_incidentes, df_riesgos, df_capacitaciones = generar_datos_simulados()
+        return df_incidentes, df_riesgos, df_capacitaciones
 
-# Mantener en session state para permitir agregar
-if 'incidentes' not in st.session_state:
-    st.session_state['incidentes'] = df_incidentes.copy()
-
-# ----------------------
-# Helper functions
-# ----------------------
-
-def calcular_kpis(df_inc):
-    total_accidentes = df_inc[df_inc['Tipo']=='Accidente'].shape[0]
-    total_incidentes = df_inc.shape[0]
-    dias_perdidos = int(df_inc['Dias_Perdidos'].sum())
-    tasa_frecuencia = round((total_accidentes / (len(df_inc)+1)) * 1000,2)  # indicador simplificado
-    return total_accidentes, total_incidentes, dias_perdidos, tasa_frecuencia
-
-
-def riesgo_to_color(nivel):
-    return {'Alto':'#ef4444','Medio':'#f59e0b','Bajo':'#10b981'}.get(nivel, '#9ca3af')
-
+    except Exception as e:
+        st.error(f"⚠️ Error al leer las hojas del archivo: {e}")
+        st.stop()
 
 def df_to_excel_bytes(df_dict):
-    # Espera un dict de {nombre_hoja: df}
-    from openpyxl import Workbook
-    import pandas as pd
+    """Convierte varios DataFrames a un archivo Excel descargable"""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for sheet, df in df_dict.items():
             df.to_excel(writer, sheet_name=sheet, index=False)
-        writer.save()
-    processed_data = output.getvalue()
-    return processed_data
+        writer.close()
+    output.seek(0)
+    return output.getvalue()
 
-# ----------------------
-# UI - Sidebar
-# ----------------------
+# ------------------------------------------------
+# CARGA DE DATOS REALES
+# ------------------------------------------------
+df_incidentes, df_riesgos, df_capacitaciones = cargar_datos_excel()
+
+if 'incidentes' not in st.session_state:
+    st.session_state['incidentes'] = df_incidentes.copy()
+
+# ------------------------------------------------
+# FUNCIONES AUXILIARES
+# ------------------------------------------------
+def calcular_kpis(df_inc):
+    total_accidentes = df_inc[df_inc['Tipo'] == 'Accidente'].shape[0]
+    total_incidentes = df_inc[df_inc['Tipo'] == 'Incidente'].shape[0]
+    dias_perdidos = int(df_inc['Días_Perdidos'].sum())
+    tasa_acc = round((total_accidentes / (len(df_inc) + 1)) * 100, 2)
+    tasa_inc = round((total_incidentes / (len(df_inc) + 1)) * 100, 2)
+    return total_accidentes, total_incidentes, dias_perdidos, tasa_acc, tasa_inc
+
+# ------------------------------------------------
+# SIDEBAR
+# ------------------------------------------------
 with st.sidebar:
-    st.image("https://raw.githubusercontent.com/yyangs21/SS0C0mB3X1M/master/LogoC.png", width=180)  # spacer
+    st.image("https://raw.githubusercontent.com/yyangs21/SS0C0mB3X1M/master/LogoC.png", width=180)
+    st.image("https://raw.githubusercontent.com/yyangs21/SS0C0mB3X1M/master/LogoSSO.png", width=180)
     st.title("SSO Dashboard")
     page = st.radio("Secciones", ["Dashboard", "Matriz de Riesgos", "Incidentes", "Alertas", "Predictivo", "Reportes"], index=0)
     st.markdown("---")
-    st.caption("Cascaron visual")
-    st.markdown("\n")
-    st.write("\n")
+    st.caption("Versión con datos reales")
 
-# ----------------------
-# Page: Dashboard
-# ----------------------
+# ------------------------------------------------
+# DASHBOARD
+# ------------------------------------------------
 if page == "Dashboard":
-    st.header("Dashboard General")
-    total_acc, total_inc, dias_perdidos, tasa_freq = calcular_kpis(st.session_state['incidentes'])
+    st.header("📊 Dashboard General")
 
-    # KPI cards
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Accidentes (tot)", total_acc)
-    kpi2.metric("Incidentes (tot)", total_inc)
-    kpi3.metric("Dias perdidos", dias_perdidos)
-    kpi4.metric("Tasa de frecuencia (x1000)", tasa_freq)
+    total_acc, total_inc, dias_perdidos, tasa_acc, tasa_inc = calcular_kpis(st.session_state['incidentes'])
+
+    # --- KPIs visuales ---
+    def generar_sparkline(df_tipo, color='#10b981'):
+        df_tipo['Mes'] = df_tipo['Fecha'].dt.to_period('M').astype(str)
+        meses_ordenados = sorted(df_tipo['Mes'].unique())
+        counts = df_tipo.groupby('Mes').size().reindex(meses_ordenados, fill_value=0)
+        fig = go.Figure(go.Scatter(
+            y=counts.values, x=counts.index, mode='lines+markers',
+            line=dict(color=color, width=3),
+            marker=dict(size=6),
+            fill='tozeroy'
+        ))
+        fig.update_layout(
+            margin=dict(l=0,r=0,t=0,b=0),
+            xaxis=dict(showgrid=False, visible=False),
+            yaxis=dict(showgrid=False, visible=False),
+            height=50
+        )
+        return fig
+
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+    df_acc = st.session_state['incidentes'][st.session_state['incidentes']['Tipo'] == 'Accidente']
+    df_inc = st.session_state['incidentes'][st.session_state['incidentes']['Tipo'] == 'Incidente']
+
+    kpi1.metric("🔴 Accidentes", total_acc)
+    kpi1.plotly_chart(generar_sparkline(df_acc, '#ef4444'), use_container_width=True)
+
+    kpi2.metric("🟡 Incidentes", total_inc)
+    kpi2.plotly_chart(generar_sparkline(df_inc, '#facc15'), use_container_width=True)
+
+    kpi3.metric("🟢 Días perdidos", dias_perdidos)
+    kpi4.metric("🔴 Tasa Accidentes (%)", tasa_acc)
+    kpi5.metric("🟡 Tasa Incidentes (%)", tasa_inc)
 
     st.markdown("---")
     left, right = st.columns([2,1])
+    df = st.session_state['incidentes'].copy()
+    df['Mes'] = df['Fecha'].dt.to_period('M').astype(str)
 
     with left:
-        st.subheader("Accidentes / Incidentes por mes")
-        df = st.session_state['incidentes'].copy()
-        df['Mes'] = df['Fecha'].dt.to_period('M').astype(str)
-        by_month = df.groupby(['Mes','Tipo']).size().reset_index(name='Count')
-        fig = px.bar(by_month, x='Mes', y='Count', color='Tipo', barmode='group')
-        fig.update_layout(xaxis={'categoryorder':'category ascending'}, height=420)
-        st.plotly_chart(fig, use_container_width=True)
+        st.subheader("📊 Incidentes por mes")
+        df_inc = df[df['Tipo'] == 'Incidente']
+        by_month_inc = df_inc.groupby('Mes').size().reset_index(name='Count')
+        fig_inc = px.bar(by_month_inc, x='Mes', y='Count', color_discrete_sequence=['#10b981'])
+        fig_inc.update_layout(xaxis={'categoryorder':'category ascending'}, height=380)
+        st.plotly_chart(fig_inc, use_container_width=True)
 
-        st.subheader("Incidentes por Area (Top) ")
-        area_count = df['Area'].value_counts().reset_index()
-        area_count.columns = ['Area','Count']
-        fig2 = px.bar(area_count, x='Area', y='Count')
-        st.plotly_chart(fig2, use_container_width=True)
+        st.subheader("📊 Accidentes por mes")
+        df_acc = df[df['Tipo'] == 'Accidente']
+        by_month_acc = df_acc.groupby('Mes').size().reset_index(name='Count')
+        fig_acc = px.bar(by_month_acc, x='Mes', y='Count', color_discrete_sequence=['#ef4444'])
+        fig_acc.update_layout(xaxis={'categoryorder':'category ascending'}, height=380)
+        st.plotly_chart(fig_acc, use_container_width=True)
 
     with right:
-        st.subheader("Semaforo de riesgo (Matriz)")
+        st.subheader("🚦 Semáforo de riesgo")
         nivel_global = df_riesgos['Nivel'].value_counts().to_dict()
-        # Simple gauge style with colored boxes
-        cols = st.columns(1)
-        alto = nivel_global.get('Alto',0)
-        medio = nivel_global.get('Medio',0)
-        bajo = nivel_global.get('Bajo',0)
+        alto = nivel_global.get('Alto', 0)
+        medio = nivel_global.get('Medio', 0)
+        bajo = nivel_global.get('Bajo', 0)
         st.markdown(f"#### 🔴 Alto: {alto}")
         st.markdown(f"#### 🟡 Medio: {medio}")
         st.markdown(f"#### 🟢 Bajo: {bajo}")
 
         st.markdown("---")
-        st.subheader("Capacitaciones (ultimos 12 meses)")
+        st.subheader("📈 Capacitaciones (últimos 12 meses)")
         fig3 = px.line(df_capacitaciones, x='Mes', y='Asistentes', markers=True)
         st.plotly_chart(fig3, use_container_width=True)
 
-# ----------------------
-# Page: Matriz de Riesgos
-# ----------------------
+# ------------------------------------------------
+# MATRIZ DE RIESGOS
+# ------------------------------------------------
 elif page == "Matriz de Riesgos":
-    st.header("Matriz de Identificacion de Riesgos (IPERC)")
-    st.write("La tabla a continuacion es un ejemplo simulado. Puedes cargar tu archivo Excel para reemplazar.")
-
-    # Upload
-    uploaded = st.file_uploader("Cargar matriz de riesgos (.xlsx o .csv)", type=['xlsx','csv'])
-    if uploaded is not None:
-        try:
-            if uploaded.name.endswith('.csv'):
-                df_r = pd.read_csv(uploaded)
-            else:
-                df_r = pd.read_excel(uploaded)
-            df_r['Riesgo'] = df_r['Probabilidad'] * df_r['Severidad']
-            df_r['Nivel'] = df_r['Riesgo'].apply(lambda x: "Alto" if x>=15 else ("Medio" if x>=6 else "Bajo"))
-        except Exception as e:
-            st.error(f"Error leyendo archivo: {e}")
-            df_r = df_riesgos.copy()
-    else:
-        df_r = df_riesgos.copy()
-
-    st.dataframe(df_r.reset_index(drop=True))
+    st.header("📋 Matriz de Identificación de Riesgos (IPERC)")
+    st.dataframe(df_riesgos.reset_index(drop=True))
 
     st.markdown("---")
-    st.subheader("Visual - Heatmap de Riesgo por Area x Nivel")
-    heat = df_r.groupby(['Area','Nivel']).size().reset_index(name='Count')
-    heat_pivot = heat.pivot(index='Area', columns='Nivel', values='Count').fillna(0)
-    st.write(heat_pivot)
-    fig_heat = go.Figure(data=go.Heatmap(
-        z=heat_pivot.values,
-        x=heat_pivot.columns,
-        y=heat_pivot.index,
-        hoverongaps=False
-    ))
-    fig_heat.update_layout(height=400)
-    st.plotly_chart(fig_heat, use_container_width=True)
+    st.subheader("🔥 Heatmap de Riesgo por Clasificación")
+    if 'Clasificación de peligro' in df_riesgos.columns:
+        heat = df_riesgos.groupby(['Clasificación de peligro', 'Nivel']).size().reset_index(name='Count')
+        heat_pivot = heat.pivot(index='Clasificación de peligro', columns='Nivel', values='Count').fillna(0)
+        fig_heat = go.Figure(data=go.Heatmap(z=heat_pivot.values, x=heat_pivot.columns, y=heat_pivot.index))
+        fig_heat.update_layout(height=400)
+        st.plotly_chart(fig_heat, use_container_width=True)
 
 # ----------------------
-# Page: Incidentes
+# Incidentes
 # ----------------------
+# ==============================
+# 📋 SECCIÓN: GESTIÓN DE INCIDENTES
+# ==============================
 elif page == "Incidentes":
-    st.header("Registro de Incidentes y Accidentes")
-    with st.expander("Agregar incidente (form) ", expanded=True):
-        col1, col2, col3 = st.columns(3)
+    st.header("📋 Registro de Incidentes y Accidentes")
+
+    # --- DataFrame base ---
+    if 'incidentes' not in st.session_state:
+        try:
+            df_incidentes = pd.read_excel(DEFAULT_EXCEL_PATH, sheet_name='Incidentes')
+        except:
+            df_incidentes = pd.DataFrame(columns=[
+                "ID", "Fecha", "Hora del Evento", "Área", "Puesto", "Tipo",
+                "Causa", "Días_Perdidos", "Severidad", "Probabilidad",
+                "Descripción", "Riesgo"
+            ])
+        st.session_state['incidentes'] = df_incidentes
+
+    df_actual = st.session_state['incidentes']
+
+    st.markdown("Aquí puedes registrar nuevos incidentes o accidentes y ver el historial completo cargado desde el archivo o generado.")
+
+    # ==============================
+    # 📥 FORMULARIO DE REGISTRO
+    # ==============================
+    with st.expander("➕ Agregar Nuevo Incidente", expanded=False):
+        st.subheader("Registrar un nuevo incidente")
+
+        # --- Cargar listas desde hoja Riesgos ---
+        try:
+            if 'df_riesgos' in st.session_state:
+                df_riesgos = st.session_state['df_riesgos']
+            else:
+                df_riesgos = pd.read_excel(DEFAULT_EXCEL_PATH, sheet_name='Riesgos')
+        except:
+            df_riesgos = pd.DataFrame(columns=["Peligro", "Severidad", "Probabilidad"])
+
+        causas_posibles = sorted(df_riesgos['Peligro'].dropna().unique().tolist()) if 'Peligro' in df_riesgos.columns else []
+        severidades_posibles = sorted(df_riesgos['Severidad'].dropna().unique().tolist()) if 'Severidad' in df_riesgos.columns else ["Baja", "Media", "Alta", "Crítica"]
+        probabilidades_posibles = sorted(df_riesgos['Probabilidad'].dropna().unique().tolist()) if 'Probabilidad' in df_riesgos.columns else ["Baja", "Media", "Alta"]
+
+        # --- Campos del formulario ---
+        col1, col2 = st.columns(2)
         with col1:
-            fecha = st.date_input("Fecha", value=datetime.today())
-            area = st.selectbox("Area", options=['Produccion','Mantenimiento','Logistica','Administracion','Calidad'])
-            puesto = st.selectbox("Puesto", options=['Operario','Supervisor','Tecnico','Auxiliar'])
+            id_incidente = st.text_input("🆔 ID del Incidente")
+            fecha_incidente = st.date_input("📅 Fecha del Incidente")
+            hora_evento = st.text_input("🕒 Hora del Evento (HH:MM)", placeholder="Ejemplo: 14:30")
         with col2:
-            tipo = st.selectbox("Tipo de evento", options=['Accidente','Incidente','Casi Accidente'])
-            causa = st.selectbox("Causa", options=['Humano','Mecanico','Ambiental','Falla de equipo','Procedimiento'])
-            dias_perdidos = st.number_input("Dias perdidos", min_value=0, value=0)
-        with col3:
-            prob = st.slider("Probabilidad (1-5)", 1,5,3)
-            sev = st.slider("Severidad (1-5)", 1,5,2)
-            desc = st.text_area("Descripcion breve", value="")
+            tipo_incidente = st.selectbox("Tipo de Incidente", ["Casi Accidente", "Incidente", "Otro"])
+            area_incidente = st.text_input("Área o Puesto involucrado")
+            dias_perdidos = st.number_input("Días perdidos (si aplica)", min_value=0, step=1)
 
-        if st.button("Agregar incidente"):
-            new_id = f"INC{1000 + len(st.session_state['incidentes']) + 1}"
-            new_row = {
-                'ID': new_id,
-                'Fecha': pd.to_datetime(fecha),
-                'Area': area,
-                'Puesto': puesto,
-                'Tipo': tipo,
-                'Causa': causa,
-                'Dias_Perdidos': int(dias_perdidos),
-                'Severidad': int(sev),
-                'Probabilidad': int(prob),
-                'Descripcion': desc,
-                'Riesgo': int(sev)*int(prob)
+        # --- Causa probable ---
+        causa_seleccionada = st.selectbox("Causa probable (Peligro identificado)", causas_posibles + ["Otro"])
+        if causa_seleccionada == "Otro":
+            causa_incidente = st.text_input("📝 Especifique otra causa")
+        else:
+            causa_incidente = causa_seleccionada
+
+        # --- Severidad y probabilidad ---
+        severidad = st.selectbox("📈 Severidad", severidades_posibles)
+        probabilidad = st.selectbox("🎯 Probabilidad", probabilidades_posibles)
+        riesgo = f"{severidad} x {probabilidad}"
+        st.info(f"Nivel de riesgo: **{riesgo}**")
+
+        descripcion = st.text_area("🗒️ Descripción del incidente o hallazgo")
+
+        # --- Botón para guardar ---
+        if st.button("💾 Guardar incidente"):
+            nuevo_incidente = {
+                "ID": id_incidente,
+                "Fecha": pd.to_datetime(fecha_incidente),  # conversión segura
+                "Hora del Evento": hora_evento,
+                "Área": area_incidente,
+                "Puesto": area_incidente,
+                "Tipo": tipo_incidente,
+                "Causa": causa_incidente,
+                "Días_Perdidos": dias_perdidos,
+                "Severidad": severidad,
+                "Probabilidad": probabilidad,
+                "Descripción": descripcion,
+                "Riesgo": riesgo
             }
-            st.session_state['incidentes'] = pd.concat([pd.DataFrame([new_row]), st.session_state['incidentes']], ignore_index=True)
-            st.success("Incidente agregado (temporal en session_state). Guarda la data final en Reportes > Exportar.")
 
+            df_incidentes = pd.concat(
+                [st.session_state['incidentes'], pd.DataFrame([nuevo_incidente])],
+                ignore_index=True
+            )
+
+            # Convertir toda la columna a datetime para evitar errores futuros
+            df_incidentes["Fecha"] = pd.to_datetime(df_incidentes["Fecha"], errors="coerce")
+
+            st.session_state['incidentes'] = df_incidentes
+
+            # --- Guardar en Excel ---
+            try:
+                with pd.ExcelWriter(DEFAULT_EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                    df_incidentes.to_excel(writer, sheet_name='Incidentes', index=False)
+                st.success("✅ Incidente agregado y guardado correctamente.")
+            except Exception as e:
+                st.warning(f"⚠️ No se pudo guardar en el archivo Excel. Error: {e}")
+
+    # ==============================
+    # 📊 MOSTRAR TABLA DE INCIDENTES
+    # ==============================
+    st.subheader("📜 Historial de Incidentes")
+
+    df_mostrar = st.session_state['incidentes'].copy()
+
+    # 🔧 Normalizar fechas para evitar conflicto Timestamp vs date
+    try:
+        df_mostrar['Fecha'] = pd.to_datetime(df_mostrar['Fecha'], errors='coerce')
+        df_mostrar = df_mostrar.sort_values(by='Fecha', ascending=False)
+    except Exception as e:
+        st.warning(f"No se pudo ordenar por fecha. Mostrando sin ordenar. Error: {e}")
+
+    st.dataframe(df_mostrar)
+
+
+
+
+    # --- Mostrar tabla actualizada ---
     st.markdown("---")
-    st.subheader("Tabla de registros")
-    st.dataframe(st.session_state['incidentes'].sort_values('Fecha', ascending=False).reset_index(drop=True))
+    st.subheader("📄 Tabla actualizada de incidentes y accidentes")
+    st.dataframe(st.session_state['incidentes'].sort_values('Fecha', ascending=False))
 
+    # --- Descargar registro actualizado ---
     st.markdown("---")
-    st.subheader("Filtros rápidos")
-    f_area = st.multiselect("Filtrar por Area", options=st.session_state['incidentes']['Area'].unique(), default=None)
-    f_tipo = st.multiselect("Filtrar por Tipo", options=st.session_state['incidentes']['Tipo'].unique(), default=None)
-    df_filtered = st.session_state['incidentes']
-    if f_area: df_filtered = df_filtered[df_filtered['Area'].isin(f_area)]
-    if f_tipo: df_filtered = df_filtered[df_filtered['Tipo'].isin(f_tipo)]
-    st.write(df_filtered[['ID','Fecha','Area','Puesto','Tipo','Causa','Riesgo']].sort_values('Fecha', ascending=False))
+    def to_excel(df):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Incidentes')
+        processed_data = output.getvalue()
+        return processed_data
 
-# ----------------------
-# Page: Alertas
-# ----------------------
+    excel_data = to_excel(st.session_state['incidentes'])
+    st.download_button(
+        label="📥 Descargar registro actualizado (Excel)",
+        data=excel_data,
+        file_name='incidentes_actualizados.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+# ------------------------------------------------
+# ALERTAS
+# ------------------------------------------------
 elif page == "Alertas":
-    st.header("Alertas Preventivas")
-    st.write("Se muestran todos los riesgos con nivel Alto (Riesgo >= 15) de la matriz, y incidentes recientes con Riesgo alto.")
-    altos_mat = df_riesgos[df_riesgos['Riesgo']>=15].copy()
-    st.subheader("Riesgos en Matriz (Alto)")
+    st.header("🚨 Alertas Preventivas")
+    altos_mat = df_riesgos[df_riesgos['Nivel'] == 'Alto']
+    st.subheader("Riesgos con nivel Alto")
     if not altos_mat.empty:
         for _, r in altos_mat.iterrows():
-            st.warning(f"Area: {r['Area']} - Peligro: {r['Peligro']} - Riesgo: {r['Riesgo']} - Nivel: {r['Nivel']}")
+            st.warning(f"⚠️ Peligro: {r.get('Peligro', 'N/A')} - Nivel: {r.get('Nivel', 'N/A')}")
     else:
-        st.success("No hay riesgos altos en la matriz (simulado).")
+        st.success("Sin riesgos altos en la matriz.")
 
     st.markdown("---")
-    st.subheader("Incidentes recientes con Riesgo Alto")
-    inc_altos = st.session_state['incidentes'][st.session_state['incidentes']['Riesgo']>=15]
+    st.subheader("Incidentes con Riesgo Alto")
+    inc_altos = st.session_state['incidentes'][st.session_state['incidentes']['Riesgo'] >= 15]
     if not inc_altos.empty:
-        st.dataframe(inc_altos[['ID','Fecha','Area','Tipo','Causa','Riesgo']].sort_values('Fecha', ascending=False))
+        st.dataframe(inc_altos[['ID','Fecha','Área','Tipo','Causa','Riesgo']])
     else:
         st.info("No hay incidentes recientes con riesgo alto.")
 
-# ----------------------
-# Page: Predictivo
-# ----------------------
+# ------------------------------------------------
+# PREDICTIVO
+# ------------------------------------------------
 elif page == "Predictivo":
-    st.header("Modulo Predictivo (placeholder)")
-    st.write("Este espacio sirve como placeholder para integrar un modelo ML. Por ahora se muestran probabilidades simuladas por area.")
-
-    # Simular probabilidades por area
-    areas = ['Produccion','Mantenimiento','Logistica','Administracion','Calidad']
-    probs = np.round(np.random.rand(len(areas))*0.6 + 0.1,2)
-    df_probs = pd.DataFrame({'Area':areas,'Probabilidad_Accidente':probs})
-    figp = px.bar(df_probs, x='Area', y='Probabilidad_Accidente', range_y=[0,1])
+    st.header("🤖 Módulo Predictivo (placeholder)")
+    areas = st.session_state['incidentes']['Área'].unique()
+    probs = np.round(np.random.rand(len(areas)) * 0.6 + 0.1, 2)
+    df_probs = pd.DataFrame({'Área': areas, 'Probabilidad_Accidente': probs})
+    figp = px.bar(df_probs, x='Área', y='Probabilidad_Accidente', range_y=[0, 1])
     st.plotly_chart(figp, use_container_width=True)
 
-    st.markdown("---")
-    st.subheader("Simular prediccion por trabajador")
-    with st.form("sim_form"):
-        edad = st.number_input("Edad", min_value=18, max_value=70, value=32)
-        antig = st.number_input("Antiguedad (años)", min_value=0, max_value=50, value=3)
-        horas_ext = st.number_input("Horas extra semanales", min_value=0, max_value=80, value=5)
-        area_sel = st.selectbox("Area", areas)
-        cap = st.number_input("Capacitaciones ultimos 12 meses", min_value=0, max_value=20, value=2)
-        submitted = st.form_submit_button("Predecir (simulado)")
-    if submitted:
-        score = min(0.95, round(0.05 + 0.01*horas_ext + 0.003*(50-edad) + 0.02*(0 if cap>3 else 1) + np.random.rand()*0.05,2))
-        st.metric("Probabilidad estimada de accidente", f"{int(score*100)} %")
-        st.info("Este valor es una simulacion. Integra tu modelo ML (pickle) para predicciones reales.")
 
-# ----------------------
-# Page: Reportes
-# ----------------------
+# ------------------------------------------------
+# REPORTES
+# ------------------------------------------------
 elif page == "Reportes":
-    st.header("Reportes y Exportacion")
-    st.write("Exporta los datos actuales (simulados o cargados) a un archivo Excel listo para compartir.")
+    st.header("📤 Reportes y Exportación")
+    st.write("Descarga un consolidado de todas las hojas en Excel:")
 
-    if st.button("Exportar datos a Excel (incidentes, riesgos, capacitaciones)"):
+    if st.button("Exportar datos a Excel"):
         data = {
-            'incidentes': st.session_state['incidentes'].reset_index(drop=True),
-            'riesgos': df_riesgos.reset_index(drop=True),
-            'capacitaciones': df_capacitaciones.reset_index(drop=True)
+            'Incidentes': st.session_state['incidentes'],
+            'Riesgos': df_riesgos,
+            'Capacitaciones': df_capacitaciones
         }
         bytes_xlsx = df_to_excel_bytes(data)
-        st.download_button(label='Descargar Excel', data=bytes_xlsx, file_name='sso_datos_simulados.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        st.download_button(
+            label='⬇️ Descargar Excel',
+            data=bytes_xlsx,
+            file_name='sso_datos_reales.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
 
-    st.markdown("---")
-    st.subheader("Descarga imagenes de graficos (ejemplo)")
-    st.write("Haz click derecho en cualquier grafico y guardalo, o usa las opciones nativas de Plotly.")
-
-# ----------------------
-# Footer
-# ----------------------
+# ------------------------------------------------
+# FOOTER
+# ------------------------------------------------
 st.markdown("\n---\n")
-st.markdown("<div style='text-align:center;color:#6b7280;'>Cascaron SSO - Demo .</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;color:#6b7280;'>SSO Dashboard - Datos Reales © 2025</div>", unsafe_allow_html=True)
+
 
