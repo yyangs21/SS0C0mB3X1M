@@ -13,7 +13,7 @@ import os
 st.set_page_config(page_title="SSO Dashboard - Datos Reales", layout="wide")
 
 # Ruta fija al archivo Excel
-DEFAULT_EXCEL_PATH = r"C:\Users\yyang\Downloads\SSO_datos_ejemplo.xlsx"
+DEFAULT_EXCEL_PATH = r"SSO_datos_ejemplo.xlsx"
 
 # ------------------------------------------------
 # FUNCIONES DE CARGA Y EXPORTACIÓN
@@ -387,5 +387,6 @@ elif page == "Reportes":
 # ------------------------------------------------
 st.markdown("\n---\n")
 st.markdown("<div style='text-align:center;color:#6b7280;'>SSO Dashboard - Datos Reales © 2025</div>", unsafe_allow_html=True)
+
 
 
