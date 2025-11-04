@@ -12,29 +12,45 @@ import requests
 # ------------------------------------------------
 # 🔄 FUNCIÓN: Subir Excel actualizado a GitHub
 # ------------------------------------------------
-def subir_excel_a_github(local_path, repo, ruta_en_repo, mensaje="Actualización automática de incidentes"):
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        st.warning("⚠️ No se encontró el token de GitHub. Agrega GITHUB_TOKEN en tus Secrets.")
-        return
+def subir_excel_a_github(local_path, mensaje="Actualización automática de incidentes"):
+    """
+    Sube un archivo Excel al repositorio de GitHub usando token fijo.
+    Repo y ruta del archivo ya están predefinidos.
+    """
+    # 🔑 Token fijo (ya incluido)
+    token = "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"
+
+    # Repo y ruta del archivo en GitHub
+    repo = "yyangs21/SS0C0mB3X1M"
+    ruta_en_repo = "SSO_datos_ejemplo.xlsx"
+
     try:
+        # Leer archivo local y codificar en base64
         with open(local_path, "rb") as f:
             contenido = f.read()
         contenido_b64 = base64.b64encode(contenido).decode("utf-8")
+
         url = f"https://api.github.com/repos/{repo}/contents/{ruta_en_repo}"
         headers = {"Authorization": f"token {token}"}
+
+        # Obtener SHA si el archivo ya existe
         r = requests.get(url, headers=headers)
         sha = r.json().get("sha") if r.status_code == 200 else None
+
         data = {"message": mensaje, "content": contenido_b64, "branch": "main"}
         if sha:
             data["sha"] = sha
+
+        # Subir o actualizar archivo
         r = requests.put(url, headers=headers, json=data)
         if r.status_code in [200, 201]:
             st.success("✅ Archivo Excel actualizado en GitHub correctamente.")
         else:
             st.warning(f"⚠️ Error al subir a GitHub: {r.text}")
+
     except Exception as e:
         st.error(f"❌ Error al intentar subir el archivo a GitHub: {e}")
+
 
 # ------------------------------------------------
 # CONFIGURACIÓN INICIAL
@@ -339,6 +355,7 @@ elif page == "Reportes":
             file_name=f"SSO_Reportes_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
+
 
 
 
