@@ -6,7 +6,52 @@ import plotly.graph_objects as go
 from io import BytesIO
 from datetime import datetime
 import os
+import base64
+import requests
 
+# ------------------------------------------------
+# 🔄 FUNCIÓN: Subir Excel actualizado a GitHub
+# ------------------------------------------------
+def subir_excel_a_github(local_path, repo, ruta_en_repo, mensaje="Actualización automática de incidentes"):
+    """
+    Sube un archivo Excel al repositorio de GitHub mediante la API v3.
+    Requiere un token con permisos de 'repo' en la variable GITHUB_TOKEN.
+    """
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        st.warning("⚠️ No se encontró el token de GitHub. Agrega GITHUB_TOKEN en tus Secrets.")
+        return
+
+    try:
+        # Leer archivo local en binario y convertir a base64
+        with open(local_path, "rb") as f:
+            contenido = f.read()
+        contenido_b64 = base64.b64encode(contenido).decode("utf-8")
+
+        url = f"https://api.github.com/repos/{repo}/contents/{ruta_en_repo}"
+        headers = {"Authorization": f"token {token}"}
+
+        # Obtener SHA si el archivo ya existe
+        r = requests.get(url, headers=headers)
+        sha = r.json().get("sha") if r.status_code == 200 else None
+
+        data = {
+            "message": mensaje,
+            "content": contenido_b64,
+            "branch": "main",
+        }
+        if sha:
+            data["sha"] = sha
+
+        r = requests.put(url, headers=headers, json=data)
+
+        if r.status_code in [200, 201]:
+            st.success("✅ Archivo Excel actualizado en GitHub correctamente.")
+        else:
+            st.warning(f"⚠️ Error al subir a GitHub: {r.text}")
+
+    except Exception as e:
+        st.error(f"❌ Error al intentar subir el archivo a GitHub: {e}")
 # ------------------------------------------------
 # CONFIGURACIÓN INICIAL
 # ------------------------------------------------
@@ -281,12 +326,23 @@ elif page == "Incidentes":
             st.session_state['incidentes'] = df_incidentes
 
             # --- Guardar en Excel ---
-            try:
-                with pd.ExcelWriter(DEFAULT_EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    df_incidentes.to_excel(writer, sheet_name='Incidentes', index=False)
-                st.success("✅ Incidente agregado y guardado correctamente.")
-            except Exception as e:
-                st.warning(f"⚠️ No se pudo guardar en el archivo Excel. Error: {e}")
+           # --- Guardar en Excel local y subir a GitHub ---
+try:
+    with pd.ExcelWriter(DEFAULT_EXCEL_PATH, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+        df_incidentes.to_excel(writer, sheet_name='Incidentes', index=False)
+    st.success("✅ Incidente agregado y guardado correctamente en local.")
+
+    # 🔼 Subir al repositorio de GitHub
+    subir_excel_a_github(
+        local_path=DEFAULT_EXCEL_PATH,
+        repo="yyangs21/SS0C0mB3X1M",  # 🧩 cambia esto a tu repositorio real
+        ruta_en_repo="SSO_datos_ejemplo.xlsx",  # 🧩 o "data/SSO_datos_ejemplo.xlsx" si está en una carpeta
+        mensaje=f"Nuevo incidente agregado - {id_incidente or 'sin ID'}"
+    )
+
+except Exception as e:
+    st.warning(f"⚠️ No se pudo guardar o subir a GitHub. Error: {e}")
+
 
     # ==============================
     # 📊 MOSTRAR TABLA DE INCIDENTES
@@ -387,6 +443,7 @@ elif page == "Reportes":
 # ------------------------------------------------
 st.markdown("\n---\n")
 st.markdown("<div style='text-align:center;color:#6b7280;'>SSO Dashboard - Datos Reales © 2025</div>", unsafe_allow_html=True)
+
 
 
 
