@@ -274,14 +274,16 @@ elif page == "Incidentes":
             df_actual = calcular_riesgo_valor(df_actual)
             st.session_state['incidentes'] = df_actual
             try:
+                # Guardar local
                 df_actual.to_excel(DEFAULT_EXCEL_PATH, index=False, engine='openpyxl')
                 st.success("✅ Incidente agregado y guardado correctamente en local.")
+
+                # Subir a GitHub usando la función ya fija
                 subir_excel_a_github(
                     local_path=DEFAULT_EXCEL_PATH,
-                    repo="yyangs21/SS0C0mB3X1M",
-                    ruta_en_repo="SSO_datos_ejemplo.xlsx",
                     mensaje=f"Nuevo incidente agregado - {id_incidente or 'sin ID'}"
                 )
+
             except Exception as e:
                 st.warning(f"⚠️ No se pudo guardar o subir a GitHub. Error: {e}")
 
@@ -290,6 +292,7 @@ elif page == "Incidentes":
     df_mostrar['Fecha'] = pd.to_datetime(df_mostrar['Fecha'], errors='coerce')
     df_mostrar = df_mostrar.sort_values(by='Fecha', ascending=False)
     st.dataframe(df_mostrar)
+
 
     # Descargar Excel actualizado
     def to_excel(df):
@@ -355,6 +358,7 @@ elif page == "Reportes":
             file_name=f"SSO_Reportes_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
+
 
 
 
