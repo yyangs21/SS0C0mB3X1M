@@ -150,8 +150,8 @@ with st.sidebar:
     st.title("SSO Dashboard")
     page = st.radio("Secciones", ["Dashboard", "Matriz de Riesgos", "Incidentes", "Alertas", "Predictivo", "Reportes"], index=0)
     st.markdown("---")
-    st.caption("Versión con datos reales desde GitHub")
-    if st.button("🔄 Actualizar datos desde GitHub"):
+    st.caption("Click para Actualizar Versión")
+    if st.button("🔄 Actualizar datos"):
         df_incidentes, df_riesgos, df_capacitaciones = cargar_datos()
         df_incidentes = calcular_riesgo_valor(df_incidentes)
         st.success("✅ Datos actualizados desde GitHub")
@@ -354,6 +354,7 @@ elif page == "Reportes":
         file_name="SSO_Reporte_Completo.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 
