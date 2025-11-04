@@ -5,7 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 from datetime import datetime
-import os
 import base64
 import requests
 
@@ -24,7 +23,7 @@ def descargar_excel_github():
     try:
         token = st.secrets["GITHUB_TOKEN"]
     except:
-        st.error("❌ No se encontró el token de GitHub en Streamlit Secrets. El dashboard no puede funcionar.")
+        st.error("❌ No se encontró el token de GitHub en Streamlit Secrets.")
         st.stop()
 
     url = f"https://api.github.com/repos/{REPO}/contents/{EXCEL_PATH_REPO}?ref={BRANCH}"
@@ -35,7 +34,7 @@ def descargar_excel_github():
         contenido_bytes = base64.b64decode(contenido_b64)
         return BytesIO(contenido_bytes)
     elif r.status_code == 404:
-        st.error(f"❌ El archivo {EXCEL_PATH_REPO} no existe en GitHub. El dashboard no puede funcionar.")
+        st.error(f"❌ El archivo {EXCEL_PATH_REPO} no existe en GitHub.")
         st.stop()
     else:
         st.error(f"❌ Error al acceder al archivo en GitHub: {r.text}")
@@ -76,9 +75,8 @@ def subir_excel_a_github_bytes(excel_bytes, mensaje="Actualización automática 
         st.warning(f"⚠️ Error al subir a GitHub: {r.text}")
 
 # ------------------------------------------------
-# 🔄 FUNCIONES DE CARGA
+# 🔄 FUNCIONES DE CARGA (SIN CACHE)
 # ------------------------------------------------
-@st.cache_data(show_spinner=False)
 def cargar_datos():
     excel_io = descargar_excel_github()
     try:
@@ -153,6 +151,10 @@ with st.sidebar:
     page = st.radio("Secciones", ["Dashboard", "Matriz de Riesgos", "Incidentes", "Alertas", "Predictivo", "Reportes"], index=0)
     st.markdown("---")
     st.caption("Versión con datos reales desde GitHub")
+    if st.button("🔄 Actualizar datos desde GitHub"):
+        df_incidentes, df_riesgos, df_capacitaciones = cargar_datos()
+        df_incidentes = calcular_riesgo_valor(df_incidentes)
+        st.success("✅ Datos actualizados desde GitHub")
 
 # ------------------------------------------------
 # DASHBOARD
@@ -285,7 +287,6 @@ elif page == "Incidentes":
                 'Capacitaciones': df_capacitaciones
             })
             subir_excel_a_github_bytes(excel_bytes, mensaje=f"Nuevo incidente agregado - {id_incidente or 'sin ID'}")
-
             st.success("✅ Incidente agregado y guardado en GitHub correctamente.")
 
     st.subheader("📜 Historial de Incidentes")
@@ -325,10 +326,11 @@ elif page == "Alertas":
         st.info("No hay incidentes recientes con riesgo alto.")
 
 # ------------------------------------------------
-# PREDICTIVO (placeholder)
+# PREDICTIVO
 # ------------------------------------------------
 elif page == "Predictivo":
-    st.header("🤖 Módulo Predictivo (placeholder)")
+    st.header("🤖 Módulo Predictivo")
+    st.info("Simulación de predicción de probabilidad de accidentes por área.")
     areas = df_incidentes['Área'].unique()
     probs = np.round(np.random.rand(len(areas)) * 0.6 + 0.1, 2)
     df_probs = pd.DataFrame({'Área': areas, 'Probabilidad_Accidente': probs})
@@ -339,20 +341,20 @@ elif page == "Predictivo":
 # REPORTES
 # ------------------------------------------------
 elif page == "Reportes":
-    st.header("📤 Reportes y Exportación")
-    st.write("Descarga un consolidado de todas las hojas en Excel:")
-    if st.button("Exportar datos completos"):
-        excel_bytes = df_to_excel_bytes({
-            'Incidentes': df_incidentes,
-            'Riesgos': df_riesgos,
-            'Capacitaciones': df_capacitaciones
-        })
-        st.download_button(
-            label="📥 Descargar Excel Consolidado",
-            data=excel_bytes,
-            file_name=f"SSO_Reportes_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
+    st.header("📄 Generar Reportes")
+    st.info("Descarga de reportes consolidados en Excel.")
+    excel_bytes = df_to_excel_bytes({
+        'Incidentes': df_incidentes,
+        'Riesgos': df_riesgos,
+        'Capacitaciones': df_capacitaciones
+    })
+    st.download_button(
+        label="📥 Descargar reporte completo",
+        data=excel_bytes,
+        file_name="SSO_Reporte_Completo.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 
 
 
