@@ -12,9 +12,6 @@ import requests
 # ------------------------------------------------
 # 🔄 FUNCIÓN: Subir Excel actualizado a GitHub
 # ------------------------------------------------
-# ------------------------------------------------
-# 🔄 FUNCIÓN: Subir Excel actualizado a GitHub usando Streamlit Secrets
-# ------------------------------------------------
 def subir_excel_a_github(local_path, mensaje="Actualización automática de incidentes"):
     """
     Sube un archivo Excel al repositorio de GitHub usando token en Streamlit Secrets.
@@ -61,8 +58,6 @@ def subir_excel_a_github(local_path, mensaje="Actualización automática de inci
     except Exception as e:
         st.error(f"❌ Error al intentar subir el archivo a GitHub: {e}")
 
-
-
 # ------------------------------------------------
 # CONFIGURACIÓN INICIAL
 # ------------------------------------------------
@@ -81,18 +76,25 @@ def cargar_datos_excel(path=DEFAULT_EXCEL_PATH):
         df_incidentes = pd.read_excel(path, sheet_name="Incidentes")
         df_riesgos = pd.read_excel(path, sheet_name="Riesgos")
         df_capacitaciones = pd.read_excel(path, sheet_name="Capacitaciones")
+        
         # Limpieza básica
         df_incidentes['Fecha'] = pd.to_datetime(df_incidentes['Fecha'], errors='coerce')
         if 'Riesgo' not in df_incidentes.columns:
-            df_incidentes['Riesgo'] = df_incidentes['Severidad'] * df_incidentes['Probabilidad']
+            if 'Severidad' in df_incidentes.columns and 'Probabilidad' in df_incidentes.columns:
+                df_incidentes['Riesgo'] = df_incidentes['Severidad'] * df_incidentes['Probabilidad']
+            else:
+                df_incidentes['Riesgo'] = 0
+
         if 'Nivel de Riesgo' in df_riesgos.columns:
             df_riesgos['Nivel'] = df_riesgos['Nivel de Riesgo']
         else:
             if 'Probabilidad' in df_riesgos.columns and 'Severidad' in df_riesgos.columns:
                 df_riesgos['Riesgo'] = df_riesgos['Probabilidad'] * df_riesgos['Severidad']
                 df_riesgos['Nivel'] = df_riesgos['Riesgo'].apply(lambda x: "Alto" if x >= 15 else ("Medio" if x >= 6 else "Bajo"))
+        
         if 'Mes' in df_capacitaciones.columns:
             df_capacitaciones['Mes'] = df_capacitaciones['Mes'].astype(str)
+
         return df_incidentes, df_riesgos, df_capacitaciones
     except Exception as e:
         st.error(f"⚠️ Error al leer las hojas del archivo: {e}")
@@ -133,7 +135,7 @@ st.session_state['incidentes'] = calcular_riesgo_valor(st.session_state['inciden
 def calcular_kpis(df_inc):
     total_accidentes = df_inc[df_inc['Tipo'] == 'Accidente'].shape[0]
     total_incidentes = df_inc[df_inc['Tipo'] == 'Incidente'].shape[0]
-    dias_perdidos = int(df_inc['Días_Perdidos'].sum())
+    dias_perdidos = int(df_inc['Días_Perdidos'].sum()) if 'Días_Perdidos' in df_inc.columns else 0
     tasa_acc = round((total_accidentes / (len(df_inc) + 1)) * 100, 2)
     tasa_inc = round((total_incidentes / (len(df_inc) + 1)) * 100, 2)
     return total_accidentes, total_incidentes, dias_perdidos, tasa_acc, tasa_inc
@@ -289,12 +291,11 @@ elif page == "Incidentes":
                 df_actual.to_excel(DEFAULT_EXCEL_PATH, index=False, engine='openpyxl')
                 st.success("✅ Incidente agregado y guardado correctamente en local.")
 
-                # Subir a GitHub usando la función ya fija
+                # Subir a GitHub
                 subir_excel_a_github(
                     local_path=DEFAULT_EXCEL_PATH,
                     mensaje=f"Nuevo incidente agregado - {id_incidente or 'sin ID'}"
                 )
-
             except Exception as e:
                 st.warning(f"⚠️ No se pudo guardar o subir a GitHub. Error: {e}")
 
@@ -303,7 +304,6 @@ elif page == "Incidentes":
     df_mostrar['Fecha'] = pd.to_datetime(df_mostrar['Fecha'], errors='coerce')
     df_mostrar = df_mostrar.sort_values(by='Fecha', ascending=False)
     st.dataframe(df_mostrar)
-
 
     # Descargar Excel actualizado
     def to_excel(df):
