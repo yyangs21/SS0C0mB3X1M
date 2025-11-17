@@ -42,9 +42,15 @@ def load_image_try(path):
 
 header_img = load_image_try("assets/Encabezado.png") or load_image_try("Encabezado.png")
 if header_img:
-    st.image(header_img, use_column_width=True)
+    # Puedes cambiar width y height a tu gusto
+    st.image(header_img, width=800, height=120)  # ejemplo: 800px ancho x 120px alto
 else:
-    st.markdown("<div class='header'>📄 Formulario ISO 9001 — Inteligente<br><span class='small'>Actualiza Google Sheets → la app se actualiza automáticamente</span></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='header'>📄 Formulario ISO 9001 — Inteligente<br>"
+        "<span class='small'>Actualiza Google Sheets → la app se actualiza automáticamente</span></div>",
+        unsafe_allow_html=True
+    )
+
 
 st.write("")
 
@@ -287,6 +293,7 @@ if footer_img:
     st.image(footer_img, use_column_width=True)
 else:
     st.markdown("<div class='small' style='text-align:center;margin-top:20px;color:#777;'>Formulario automatizado · Mantenimiento ISO · Generado con IA</div>", unsafe_allow_html=True)
+
 
 
 
