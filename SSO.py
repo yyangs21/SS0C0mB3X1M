@@ -1,361 +1,293 @@
+# FormularioISO.py
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from io import BytesIO
-from datetime import datetime
-import base64
-import requests
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import io
+import os
+from dotenv import load_dotenv
+import openai
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import letter
+from PIL import Image
 
-# ------------------------------------------------
-# CONFIGURACIÓN INICIAL
-# ------------------------------------------------
-st.set_page_config(page_title="SSO Dashboard - Datos Reales", layout="wide")
-REPO = "yyangs21/SS0C0mB3X1M"
-EXCEL_PATH_REPO = "SSO_datos_ejemplo.xlsx"
-BRANCH = "main"
+# ---------------------------
+# CONFIG
+# ---------------------------
+load_dotenv()  # carga .env en local si existe
+st.set_page_config(page_title="Formulario ISO 9001 — Inteligente", layout="wide", page_icon="📄")
 
-# ------------------------------------------------
-# 🔄 FUNCIÓN: Descargar Excel desde GitHub
-# ------------------------------------------------
-def descargar_excel_github():
+# CSS / Diseño visual mejorado
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
+    .header { border-radius:12px; padding:14px; background: linear-gradient(90deg,#f7fbff, #ffffff); box-shadow: 0 6px 20px rgba(13,38,66,0.06); }
+    .card { background:#fff; padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(12,40,80,0.04); margin-bottom:10px; }
+    .chip { display:inline-block; padding:6px 10px; margin:4px; border-radius:18px; background:#f1f7ff; border:1px solid #e1efff; font-size:14px; }
+    .small{ font-size:13px; color:#666; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Header image (intentará cargar local/asset; si está en repo público, Streamlit lo servirá)
+def load_image_try(path):
     try:
-        token = st.secrets["GITHUB_TOKEN"]
-    except:
-        st.error("❌ No se encontró el token de GitHub en Streamlit Secrets.")
-        st.stop()
+        return Image.open(path)
+    except Exception:
+        return None
 
-    url = f"https://api.github.com/repos/{REPO}/contents/{EXCEL_PATH_REPO}?ref={BRANCH}"
-    headers = {"Authorization": f"token {token}"}
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        contenido_b64 = r.json()["content"]
-        contenido_bytes = base64.b64decode(contenido_b64)
-        return BytesIO(contenido_bytes)
-    elif r.status_code == 404:
-        st.error(f"❌ El archivo {EXCEL_PATH_REPO} no existe en GitHub.")
-        st.stop()
-    else:
-        st.error(f"❌ Error al acceder al archivo en GitHub: {r.text}")
-        st.stop()
+header_img = load_image_try("assets/Encabezado.png") or load_image_try("Encabezado.png")
+if header_img:
+    st.image(header_img, use_column_width=True)
+else:
+    st.markdown("<div class='header'><h2>📄 Formulario ISO 9001 — Inteligente</h2><p class='small'>Actualiza Google Sheets → la app se actualiza automáticamente</p></div>", unsafe_allow_html=True)
 
-# ------------------------------------------------
-# 🔄 FUNCIÓN: Subir Excel actualizado a GitHub
-# ------------------------------------------------
-def subir_excel_a_github_bytes(excel_bytes, mensaje="Actualización automática de incidentes"):
-    try:
-        token = st.secrets["GITHUB_TOKEN"]
-    except:
-        st.warning("⚠️ No se encontró el token de GitHub en Streamlit Secrets.")
-        return
+st.write("")
 
-    url = f"https://api.github.com/repos/{REPO}/contents/{EXCEL_PATH_REPO}"
-    headers = {"Authorization": f"token {token}"}
+# ---------------------------
+# CARGAR CREDENCIALES
+# ---------------------------
+OPENAI_KEY = None
+if "OPENAI_API_KEY" in st.secrets:
+    OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
+else:
+    OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-    # Verificar si existe para obtener sha
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        sha = r.json().get("sha")
-    elif r.status_code == 404:
-        sha = None
-    else:
-        st.error(f"Error al verificar archivo en GitHub: {r.text}")
-        return
+if OPENAI_KEY:
+    openai.api_key = OPENAI_KEY
+else:
+    st.warning("OPENAI API key no detectada. Algunas funciones de IA no estarán disponibles.")
 
-    contenido_b64 = base64.b64encode(excel_bytes).decode("utf-8")
-    data = {"message": mensaje, "content": contenido_b64, "branch": BRANCH}
-    if sha:
-        data["sha"] = sha
-
-    r = requests.put(url, headers=headers, json=data)
-    if r.status_code in [200, 201]:
-        st.success("✅ Archivo Excel actualizado en GitHub correctamente.")
-    else:
-        st.warning(f"⚠️ Error al subir a GitHub: {r.text}")
-
-# ------------------------------------------------
-# 🔄 FUNCIONES DE CARGA (SIN CACHE)
-# ------------------------------------------------
-def cargar_datos():
-    excel_io = descargar_excel_github()
-    try:
-        df_incidentes = pd.read_excel(excel_io, sheet_name="Incidentes")
-        excel_io.seek(0)
-        df_riesgos = pd.read_excel(excel_io, sheet_name="Riesgos")
-        excel_io.seek(0)
-        df_capacitaciones = pd.read_excel(excel_io, sheet_name="Capacitaciones")
-
-        df_incidentes['Fecha'] = pd.to_datetime(df_incidentes['Fecha'], errors='coerce')
-        if 'Riesgo' not in df_incidentes.columns:
-            if 'Severidad' in df_incidentes.columns and 'Probabilidad' in df_incidentes.columns:
-                df_incidentes['Riesgo'] = df_incidentes['Severidad'] * df_incidentes['Probabilidad']
+def get_gspread_client():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    if "SERVICE_ACCOUNT_JSON" in st.secrets:
+        try:
+            sa_info = st.secrets["SERVICE_ACCOUNT_JSON"]
+            if isinstance(sa_info, str):
+                sa_json = json.loads(sa_info)
             else:
-                df_incidentes['Riesgo'] = 0
-
-        if 'Nivel de Riesgo' in df_riesgos.columns:
-            df_riesgos['Nivel'] = df_riesgos['Nivel de Riesgo']
-        else:
-            if 'Probabilidad' in df_riesgos.columns and 'Severidad' in df_riesgos.columns:
-                df_riesgos['Riesgo'] = df_riesgos['Probabilidad'] * df_riesgos['Severidad']
-                df_riesgos['Nivel'] = df_riesgos['Riesgo'].apply(lambda x: "Alto" if x >= 15 else ("Medio" if x >= 6 else "Bajo"))
-
-        if 'Mes' in df_capacitaciones.columns:
-            df_capacitaciones['Mes'] = df_capacitaciones['Mes'].astype(str)
-
-        return df_incidentes, df_riesgos, df_capacitaciones
-    except Exception as e:
-        st.error(f"⚠️ Error al leer las hojas del archivo: {e}")
+                sa_json = sa_info
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(sa_json, scope)
+            return gspread.authorize(creds)
+        except Exception as e:
+            st.error(f"Error autenticando con SERVICE_ACCOUNT_JSON en secrets: {e}")
+            raise e
+    elif os.path.exists("service_account.json"):
+        try:
+            creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+            return gspread.authorize(creds)
+        except Exception as e:
+            st.error(f"Error autenticando con service_account.json local: {e}")
+            raise e
+    else:
+        st.error("No se encontró credencial de Google Sheets. Añade SERVICE_ACCOUNT_JSON en Streamlit Secrets o sube service_account.json local.")
         st.stop()
 
-# ------------------------------------------------
-# 🔄 FUNCIONES AUXILIARES
-# ------------------------------------------------
-def calcular_riesgo_valor(df):
-    mapping = {"Baja":1, "Media":2, "Alta":3, "Crítica":4}
-    if 'Severidad' in df.columns and 'Probabilidad' in df.columns:
-        df['Riesgo_valor'] = df['Severidad'].map(mapping) * df['Probabilidad'].map(mapping)
+# ---------------------------
+# Conectar y leer hojas
+# ---------------------------
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1mQY0_MEjluVT95iat5_5qGyffBJGp2n0hwEChvp2Ivs"
+
+try:
+    gc = get_gspread_client()
+    sh = gc.open_by_url(SHEET_URL)
+    df_areas = pd.DataFrame(sh.worksheet("Areas").get_all_records())
+    df_claus = pd.DataFrame(sh.worksheet("Clausulas").get_all_records())
+    df_ent = pd.DataFrame(sh.worksheet("Entregables").get_all_records())
+except Exception as e:
+    st.error(f"Error leyendo Google Sheets: {e}")
+    st.stop()
+
+# ---------------------------
+# VALIDACIÓN HOJA AREAS
+# ---------------------------
+required_areas_cols = ["Area", "Dueño del Proceso", "Puesto", "Correo"]
+actual_cols_norm = [c.strip().lower() for c in df_areas.columns]
+required_cols_norm = [c.strip().lower() for c in required_areas_cols]
+
+if not set(required_cols_norm).issubset(actual_cols_norm):
+    st.error(f"La hoja 'Areas' debe contener columnas: {required_areas_cols}. "
+             f"Revisa nombres exactos de columnas.")
+    st.stop()
+
+# Renombrar columnas para usar nombres estándar
+col_mapping = {}
+for req_col in required_areas_cols:
+    for actual_col in df_areas.columns:
+        if req_col.strip().lower() == actual_col.strip().lower():
+            col_mapping[actual_col] = req_col
+df_areas.rename(columns=col_mapping, inplace=True)
+
+# ---------------------------
+# UI: selector área + info
+# ---------------------------
+left, right = st.columns([2,1])
+with left:
+    area = st.selectbox("Selecciona tu área", options=df_areas["Area"].unique())
+with right:
+    st.markdown("**Acciones**")
+    if st.button("Refrescar datos"):
+        st.experimental_rerun()
+
+st.write("")
+
+info = df_areas[df_areas["Area"] == area].iloc[0]
+st.markdown(f"<div class='card'><strong>{area}</strong><br><span class='small'>Dueño: {info['Dueño del Proceso']} &nbsp; | &nbsp; Puesto: {info['Puesto']} &nbsp; | &nbsp; {info.get('Correo','')}</span></div>", unsafe_allow_html=True)
+
+st.subheader("Cláusulas ISO aplicables")
+cl_area = df_claus[df_claus["Area"] == area]
+if cl_area.empty:
+    st.info("No hay cláusulas registradas para esta área.")
+else:
+    for _, r in cl_area.iterrows():
+        st.markdown(f"<span class='chip'>{r.get('Clausula','')} — {r.get('Descripción','')}</span>", unsafe_allow_html=True)
+
+st.subheader("Entregables asignados")
+ent_area = df_ent[df_ent["Area"] == area]
+if ent_area.empty:
+    st.info("No hay entregables asignados para esta área.")
+else:
+    for _, r in ent_area.iterrows():
+        st.markdown(f"<div class='card'><strong>{r.get('Categoría','')}</strong><br>{r.get('Entregable','')}<br><span class='small'>Estado: {r.get('Estado','')}</span></div>", unsafe_allow_html=True)
+
+# ---------------------------
+# Inputs para nuevo entregable / comentario
+# ---------------------------
+st.markdown("### Registrar / Analizar un entregable")
+col_a, col_b = st.columns([2,1])
+with col_a:
+    nueva_categoria = st.text_input("Categoría", value="")
+    nuevo_entregable = st.text_input("Entregable / Tarea", value="")
+    nota_descr = st.text_area("Descripción / Comentarios", value="", height=120)
+with col_b:
+    prioridad = st.selectbox("Prioridad", ["Baja","Media","Alta"])
+    fecha_compromiso = st.date_input("Fecha compromiso")
+    responsable = st.text_input("Responsable (si aplica)", value=info.get("Dueño del Proceso",""))
+
+# ---------------------------
+# IA: Generar resumen / checklist / acciones
+# ---------------------------
+def make_prompt(area, info, clausulas_records, entregables_records, descripcion, prioridad):
+    prompt = f"""
+Eres un experto en Sistemas de Gestión de Calidad ISO 9001. 
+Genera un resumen ejecutivo y acciones concretas.
+
+Área: {area}
+Dueño del proceso: {info.get('Dueño del Proceso')}
+Puesto: {info.get('Puesto')}
+
+Cláusulas aplicables: {', '.join([str(x.get('Clausula','')) for x in clausulas_records])}
+
+Entregable a analizar: {entregables_records}
+Descripción: {descripcion}
+Prioridad: {prioridad}
+
+Entrega:
+1) Resumen ejecutivo (2-3 líneas)
+2) 3 riesgos principales con impacto
+3) 4 acciones recomendadas, priorizadas
+4) Checklist de 3 ítems para la próxima reunión
+"""
+    return prompt
+
+resumen_ia = None
+if st.button("🤖 Generar resumen IA"):
+    if not OPENAI_KEY:
+        st.error("No se detectó clave de OpenAI.")
     else:
-        df['Riesgo_valor'] = 0
-    return df
+        clausulas_records = cl_area.to_dict("records")
+        entregables_records = {"entregable": nuevo_entregable, "descripcion": nota_descr}
+        prompt = make_prompt(area, info, clausulas_records, entregables_records, nota_descr, prioridad)
+        try:
+            resp = openai.ChatCompletion.create(
+                model="gpt-5.1-mini",
+                messages=[{"role":"user","content": prompt}],
+                temperature=0.2,
+                max_tokens=700
+            )
+            resumen_ia = resp["choices"][0]["message"]["content"].strip()
+            st.success("Resumen IA generado")
+            st.markdown(f"<div class='card'>{resumen_ia}</div>", unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Error en llamada a OpenAI: {e}")
 
-def calcular_kpis(df_inc):
-    total_accidentes = df_inc[df_inc['Tipo'] == 'Accidente'].shape[0]
-    total_incidentes = df_inc[df_inc['Tipo'] == 'Incidente'].shape[0]
-    dias_perdidos = int(df_inc['Días_Perdidos'].sum()) if 'Días_Perdidos' in df_inc.columns else 0
-    tasa_acc = round((total_accidentes / (len(df_inc) + 1)) * 100, 2)
-    tasa_inc = round((total_incidentes / (len(df_inc) + 1)) * 100, 2)
-    return total_accidentes, total_incidentes, dias_perdidos, tasa_acc, tasa_inc
-
-def df_to_excel_bytes(df_dict):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for sheet, df in df_dict.items():
-            df.to_excel(writer, sheet_name=sheet, index=False)
-    output.seek(0)
-    return output.getvalue()
-
-# ------------------------------------------------
-# CARGA INICIAL DE DATOS
-# ------------------------------------------------
-df_incidentes, df_riesgos, df_capacitaciones = cargar_datos()
-df_incidentes = calcular_riesgo_valor(df_incidentes)
-
-# ------------------------------------------------
-# SIDEBAR
-# ------------------------------------------------
-with st.sidebar:
-    st.image("https://raw.githubusercontent.com/yyangs21/SS0C0mB3X1M/master/LogoC.png", width=180)
-    st.image("https://raw.githubusercontent.com/yyangs21/SS0C0mB3X1M/master/LogoSSO.png", width=180)
-    st.title("SSO Dashboard")
-    page = st.radio("Secciones", ["Dashboard", "Matriz de Riesgos", "Incidentes", "Alertas", "Predictivo", "Reportes"], index=0)
-    st.markdown("---")
-    st.caption("Click para Actualizar Versión")
-    if st.button("🔄 Actualizar datos"):
-        df_incidentes, df_riesgos, df_capacitaciones = cargar_datos()
-        df_incidentes = calcular_riesgo_valor(df_incidentes)
-        st.success("✅ Datos actualizados desde GitHub")
-
-# ------------------------------------------------
-# DASHBOARD
-# ------------------------------------------------
-if page == "Dashboard":
-    st.header("📊 Dashboard General")
-    total_acc, total_inc, dias_perdidos, tasa_acc, tasa_inc = calcular_kpis(df_incidentes)
-
-    def generar_sparkline(df_tipo, color='#10b981'):
-        df_tipo['Mes'] = df_tipo['Fecha'].dt.to_period('M').astype(str)
-        meses_ordenados = sorted(df_tipo['Mes'].unique())
-        counts = df_tipo.groupby('Mes').size().reindex(meses_ordenados, fill_value=0)
-        fig = go.Figure(go.Scatter(y=counts.values, x=counts.index, mode='lines+markers',
-                                   line=dict(color=color, width=3),
-                                   marker=dict(size=6),
-                                   fill='tozeroy'))
-        fig.update_layout(margin=dict(l=0,r=0,t=0,b=0),
-                          xaxis=dict(showgrid=False, visible=False),
-                          yaxis=dict(showgrid=False, visible=False),
-                          height=50)
-        return fig
-
-    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-    df_acc = df_incidentes[df_incidentes['Tipo'] == 'Accidente']
-    df_inc = df_incidentes[df_incidentes['Tipo'] == 'Incidente']
-
-    kpi1.metric("🔴 Accidentes", total_acc)
-    kpi1.plotly_chart(generar_sparkline(df_acc, '#ef4444'), use_container_width=True)
-    kpi2.metric("🟡 Incidentes", total_inc)
-    kpi2.plotly_chart(generar_sparkline(df_inc, '#facc15'), use_container_width=True)
-    kpi3.metric("🟢 Días perdidos", dias_perdidos)
-    kpi4.metric("🔴 Tasa Accidentes (%)", tasa_acc)
-    kpi5.metric("🟡 Tasa Incidentes (%)", tasa_inc)
-
-    st.markdown("---")
-    left, right = st.columns([2,1])
-    df_incidentes['Mes'] = df_incidentes['Fecha'].dt.to_period('M').astype(str)
-    with left:
-        st.subheader("📊 Incidentes por mes")
-        by_month_inc = df_incidentes[df_incidentes['Tipo'] == 'Incidente'].groupby('Mes').size().reset_index(name='Count')
-        fig_inc = px.bar(by_month_inc, x='Mes', y='Count', color_discrete_sequence=['#10b981'])
-        fig_inc.update_layout(xaxis={'categoryorder':'category ascending'}, height=380)
-        st.plotly_chart(fig_inc, use_container_width=True)
-        st.subheader("📊 Accidentes por mes")
-        by_month_acc = df_incidentes[df_incidentes['Tipo'] == 'Accidente'].groupby('Mes').size().reset_index(name='Count')
-        fig_acc = px.bar(by_month_acc, x='Mes', y='Count', color_discrete_sequence=['#ef4444'])
-        fig_acc.update_layout(xaxis={'categoryorder':'category ascending'}, height=380)
-        st.plotly_chart(fig_acc, use_container_width=True)
-    with right:
-        st.subheader("🚦 Semáforo de riesgo")
-        nivel_global = df_riesgos['Nivel'].value_counts().to_dict()
-        alto = nivel_global.get('Alto', 0)
-        medio = nivel_global.get('Medio', 0)
-        bajo = nivel_global.get('Bajo', 0)
-        st.markdown(f"#### 🔴 Alto: {alto}")
-        st.markdown(f"#### 🟡 Medio: {medio}")
-        st.markdown(f"#### 🟢 Bajo: {bajo}")
-        st.markdown("---")
-        st.subheader("📈 Capacitaciones (últimos 12 meses)")
-        fig3 = px.line(df_capacitaciones, x='Mes', y='Asistentes', markers=True)
-        st.plotly_chart(fig3, use_container_width=True)
-
-# ------------------------------------------------
-# MATRIZ DE RIESGOS
-# ------------------------------------------------
-elif page == "Matriz de Riesgos":
-    st.header("📋 Matriz de Identificación de Riesgos (IPERC)")
-    st.dataframe(df_riesgos.reset_index(drop=True))
-    st.markdown("---")
-    st.subheader("🔥 Heatmap de Riesgo por Clasificación")
-    if 'Clasificación de peligro' in df_riesgos.columns:
-        heat = df_riesgos.groupby(['Clasificación de peligro', 'Nivel']).size().reset_index(name='Count')
-        heat_pivot = heat.pivot(index='Clasificación de peligro', columns='Nivel', values='Count').fillna(0)
-        fig_heat = go.Figure(data=go.Heatmap(z=heat_pivot.values, x=heat_pivot.columns, y=heat_pivot.index))
-        fig_heat.update_layout(height=400)
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-# ------------------------------------------------
-# INCIDENTES
-# ------------------------------------------------
-elif page == "Incidentes":
-    st.header("📋 Registro de Incidentes y Accidentes")
-    st.markdown("Aquí puedes registrar nuevos incidentes y ver el historial completo cargado desde GitHub.")
-
-    with st.expander("➕ Agregar Nuevo Incidente", expanded=False):
-        causas_posibles = sorted(df_riesgos['Peligro'].dropna().unique().tolist()) if 'Peligro' in df_riesgos.columns else []
-        severidades_posibles = sorted(df_riesgos['Severidad'].dropna().unique().tolist()) if 'Severidad' in df_riesgos.columns else ["Baja","Media","Alta","Crítica"]
-        probabilidades_posibles = sorted(df_riesgos['Probabilidad'].dropna().unique().tolist()) if 'Probabilidad' in df_riesgos.columns else ["Baja","Media","Alta"]
-
-        col1, col2 = st.columns(2)
-        with col1:
-            id_incidente = st.text_input("🆔 ID del Incidente")
-            fecha_incidente = st.date_input("📅 Fecha del Incidente")
-            hora_evento = st.text_input("🕒 Hora del Evento (HH:MM)", placeholder="Ejemplo: 14:30")
-        with col2:
-            tipo_incidente = st.selectbox("Tipo de Incidente", ["Casi Accidente", "Incidente", "Otro"])
-            area_incidente = st.text_input("Área o Puesto involucrado")
-            dias_perdidos = st.number_input("Días perdidos (si aplica)", min_value=0, step=1)
-
-        causa_seleccionada = st.selectbox("Causa probable (Peligro identificado)", causas_posibles + ["Otro"])
-        causa_incidente = st.text_input("📝 Especifique otra causa") if causa_seleccionada=="Otro" else causa_seleccionada
-        severidad = st.selectbox("📈 Severidad", severidades_posibles)
-        probabilidad = st.selectbox("🎯 Probabilidad", probabilidades_posibles)
-        riesgo = f"{severidad} x {probabilidad}"
-        st.info(f"Nivel de riesgo: **{riesgo}**")
-        descripcion = st.text_area("🗒️ Descripción del incidente o hallazgo")
-
-        if st.button("💾 Guardar incidente"):
-            nuevo_incidente = {
-                "ID": id_incidente,
-                "Fecha": pd.to_datetime(fecha_incidente),
-                "Hora del Evento": hora_evento,
-                "Área": area_incidente,
-                "Puesto": area_incidente,
-                "Tipo": tipo_incidente,
-                "Causa": causa_incidente,
-                "Días_Perdidos": dias_perdidos,
-                "Severidad": severidad,
-                "Probabilidad": probabilidad,
-                "Descripción": descripcion,
-                "Riesgo": riesgo
-            }
-            df_incidentes = pd.concat([df_incidentes, pd.DataFrame([nuevo_incidente])], ignore_index=True)
-            df_incidentes = calcular_riesgo_valor(df_incidentes)
-
-            # Guardar y subir a GitHub
-            excel_bytes = df_to_excel_bytes({
-                'Incidentes': df_incidentes,
-                'Riesgos': df_riesgos,
-                'Capacitaciones': df_capacitaciones
-            })
-            subir_excel_a_github_bytes(excel_bytes, mensaje=f"Nuevo incidente agregado - {id_incidente or 'sin ID'}")
-            st.success("✅ Incidente agregado y guardado en GitHub correctamente.")
-
-    st.subheader("📜 Historial de Incidentes")
-    df_mostrar = df_incidentes.sort_values(by='Fecha', ascending=False)
-    st.dataframe(df_mostrar)
-
-    # Descargar Excel actualizado
-    st.download_button(
-        label="📥 Descargar registro actualizado (Excel)",
-        data=df_to_excel_bytes({
-            'Incidentes': df_incidentes,
-            'Riesgos': df_riesgos,
-            'Capacitaciones': df_capacitaciones
-        }),
-        file_name='SSO_Incidentes_Actualizados.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
-
-# ------------------------------------------------
-# ALERTAS
-# ------------------------------------------------
-elif page == "Alertas":
-    st.header("🚨 Alertas Preventivas")
-    altos_mat = df_riesgos[df_riesgos['Nivel'] == 'Alto']
-    st.subheader("Riesgos con nivel Alto")
-    if not altos_mat.empty:
-        for _, r in altos_mat.iterrows():
-            st.warning(f"⚠️ Peligro: {r.get('Peligro', 'N/A')} - Nivel: {r.get('Nivel', 'N/A')}")
+# ---------------------------
+# Guardar nuevo entregable en Sheets
+# ---------------------------
+if st.button("💾 Guardar entregable en Sheets"):
+    if not nuevo_entregable:
+        st.warning("Agrega texto en 'Entregable / Tarea' para guardar.")
     else:
-        st.success("Sin riesgos altos en la matriz.")
-    st.markdown("---")
-    st.subheader("Incidentes con Riesgo Alto")
-    inc_altos = df_incidentes[df_incidentes['Riesgo_valor'] >= 15]
-    if not inc_altos.empty:
-        st.dataframe(inc_altos[['ID','Fecha','Área','Tipo','Causa','Riesgo']])
-    else:
-        st.info("No hay incidentes recientes con riesgo alto.")
+        try:
+            row = [area, nueva_categoria, nuevo_entregable, str(fecha_compromiso), prioridad, responsable, "Pendiente"]
+            sh.worksheet("Entregables").append_row(row)
+            st.success("Entregable agregado en Google Sheets ✔️")
+        except Exception as e:
+            st.error(f"Error guardando en Sheets: {e}")
 
-# ------------------------------------------------
-# PREDICTIVO
-# ------------------------------------------------
-elif page == "Predictivo":
-    st.header("🤖 Módulo Predictivo")
-    st.info("Simulación de predicción de probabilidad de accidentes por área.")
-    areas = df_incidentes['Área'].unique()
-    probs = np.round(np.random.rand(len(areas)) * 0.6 + 0.1, 2)
-    df_probs = pd.DataFrame({'Área': areas, 'Probabilidad_Accidente': probs})
-    figp = px.bar(df_probs, x='Área', y='Probabilidad_Accidente', range_y=[0,1])
-    st.plotly_chart(figp, use_container_width=True)
+# ---------------------------
+# Generar PDF
+# ---------------------------
+def build_pdf_bytes(area, info, nuevo_entregable, nota_descr, resumen_ia):
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=40, bottomMargin=80)
+    styles = getSampleStyleSheet()
+    story = []
 
-# ------------------------------------------------
-# REPORTES
-# ------------------------------------------------
-elif page == "Reportes":
-    st.header("📄 Generar Reportes")
-    st.info("Descarga de reportes consolidados en Excel.")
-    excel_bytes = df_to_excel_bytes({
-        'Incidentes': df_incidentes,
-        'Riesgos': df_riesgos,
-        'Capacitaciones': df_capacitaciones
-    })
-    st.download_button(
-        label="📥 Descargar reporte completo",
-        data=excel_bytes,
-        file_name="SSO_Reporte_Completo.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    header_path = "assets/Encabezado.png"
+    if not os.path.exists(header_path) and os.path.exists("Encabezado.png"):
+        header_path = "Encabezado.png"
+    if os.path.exists(header_path):
+        try:
+            story.append(RLImage(header_path, width=500, height=60))
+            story.append(Spacer(1, 8))
+        except Exception:
+            pass
 
+    story.append(Paragraph(f"<b>Reporte ISO 9001 — {area}</b>", styles["Title"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(f"Dueño: {info.get('Dueño del Proceso')} — Puesto: {info.get('Puesto')} — Email: {info.get('Correo')}", styles["Normal"]))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("<b>Entregable</b>", styles["Heading3"]))
+    story.append(Paragraph(f"{nuevo_entregable}", styles["Normal"]))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("<b>Descripción</b>", styles["Normal"]))
+    story.append(Paragraph(nota_descr or "-", styles["Normal"]))
+    story.append(Spacer(1, 8))
+    if resumen_ia:
+        story.append(Paragraph("<b>Resumen IA</b>", styles["Heading3"]))
+        story.append(Paragraph(resumen_ia, styles["Normal"]))
+        story.append(Spacer(1, 8))
 
+    footer_path = "assets/Pie.png"
+    if not os.path.exists(footer_path) and os.path.exists("Pie.png"):
+        footer_path = "Pie.png"
+    if os.path.exists(footer_path):
+        try:
+            story.append(Spacer(1, 20))
+            story.append(RLImage(footer_path, width=500, height=50))
+        except Exception:
+            pass
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+if st.button("📥 Generar y descargar PDF"):
+    pdf_buf = build_pdf_bytes(area, info, nuevo_entregable, nota_descr, resumen_ia or "")
+    st.download_button("Descargar Reporte PDF", data=pdf_buf, file_name=f"Reporte_ISO_{area}.pdf", mime="application/pdf")
+
+# Footer visual
+footer_img = load_image_try("assets/Pie.png") or load_image_try("Pie.png")
+if footer_img:
+    st.image(footer_img, use_column_width=True)
+else:
+    st.markdown("<div class='small' style='text-align:center;margin-top:20px;color:#777;'>Formulario automatizado · Mantenimiento ISO · Generado con IA</div>", unsafe_allow_html=True)
 
 
 
